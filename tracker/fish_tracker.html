@@ -1,0 +1,288 @@
+<!doctype html>
+<!--
+    Zebrafish Tracker
+
+    Usage: Run local http server from tracking directory.
+           Add video src to video URL parameter.
+
+    E.g: localhost:8000/fish_tracker.html?video=assets/test_video.mp4
+
+ -->
+
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Zebrafish Tracker</title>
+  <script src="build/tracking.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/1.33.1/plotly.min.js" integrity="sha512-V0j9LhrK9IMNdFYZqh+IqU4cjo7wdxyHNyH+L0td4HryBuZ7Oq6QxP2/CWr6TituX31+gv5PnolvERuTbz8UNA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="http://d3js.org/d3.v3.min.js" charset="utf-8"></script>
+
+  <style>
+    body {
+      font-family: Arial;
+    }
+
+    .demo-container {
+      background-color: black;
+    }
+
+    video, canvas {
+      position: absolute;
+    }
+  </style>
+</head>
+<body>
+  <h1 id='title' align=center>Zebrafish Tracker</h1>
+  <div id="rectangle"></div>
+  <div id='container'></div>
+  <script>
+      // get video src from URL
+      var videoURL = new URLSearchParams(window.location.search).get('video');
+
+      // update video src
+      document.getElementById('container').innerHTML = `
+      <video id="video" width="800" height="530" preload autoplay muted onended="vidEnded()">
+        <source src=`+videoURL+`>
+      </video>
+      `;
+
+      // get video name from src
+      var vidNameArray = document.getElementsByTagName('source')[0].src.split('/');
+      var vidName = vidNameArray[vidNameArray.length-1];
+      document.getElementById('title').innerHTML = 'Zebrafish Tracker - '+vidName;
+
+  </script>
+
+      <!-- video DOM element-->
+      <canvas id="canvas" width="800" height="500"></canvas>
+
+      <!-- plot, heatmap & average Y DOM elements-->
+      <div id="plot" style="width:600px;height:500px;position:absolute;top:700px"></div>
+      <div id="map" style="width:600px;height:500px;position:absolute;top:1100px"></div>
+      <div id='avY' style="width:50px;height:100px;position:absolute;right:50px;top:700px"></div>
+
+  <script>
+
+      var playing = true;
+      var average = (array) => array.reduce((a, b) => a + b) / array.length;
+      var heatmap = [[],[],[],[],[],[],[],[],[],[]];
+      var heatmapWidth = 700;
+      var heatmapHeight = 400;
+
+      // called when video ends
+      function vidEnded() {
+        playing = false; // stop listening
+        drawPlot(); // generate plot
+        drawMap(); // generate heatmap
+        document.getElementById('avY').innerHTML = 'average y: '+parseInt(average(outputDataY)); // update average y position
+      }
+
+      // called to download heatmap
+      function download(filename, text) {
+        var pom = document.createElement('a');
+        pom.setAttribute('href', 'data:application/octet-stream;base64,'+encodeURIComponent(text));
+        pom.setAttribute('download', filename);
+
+        if (document.createEvent) {
+            var event = document.createEvent('MouseEvents');
+            event.initEvent('click', true, true);
+            pom.dispatchEvent(event);
+        } else {
+            pom.click();
+          }
+        }
+
+      // handles heatmap generation
+      function generateHeatmap() {
+        // iterate for each column in each row (i.e. for each tile in the heatmap)
+        // for every point with an x and y value that lies within this tile
+        // increment value for this tile in heatmap array
+        var ij;
+        for (ij=0;ij<10;ij++){
+          var i;
+          for (i=0;i<10;i++){
+            var j;
+            for (j=0;j<outputDataX.length;j++){
+              if (heatmap[ij][i] == undefined) {heatmap[ij][i]=0}
+              if(getRow((-1*heatmapHeight),10,ij,outputDataY[j]) && getColumn(heatmapWidth,10,i,outputDataX[j])) {
+              //  console.log('true');
+                heatmap[ij][i]++;
+              }
+
+            }
+          }
+        }
+        // return the heatmap array
+        return heatmap
+      }
+      function getRow(max,step,n,val){
+        // check if value is in a given row
+        n--;
+        step++;
+        let upperB = max - max/step * (n+1)
+        let lowerB = max - max/step * n
+        let output = false;
+        if (val<upperB && val>=lowerB) { output = true }
+        return output
+      }
+      function getColumn(max,step,n,val) {
+        // check if value is in a given column
+        let upperB = max/step * (n+1)
+        let lowerB = max/step * n
+        let output = false;
+        if (val<upperB && val>=lowerB) { output = true }
+        return output
+      }
+
+      function checkData(data) {
+        // checks heatmap for snails:
+        // if one heatmap tile is much greater than
+        // the others, it will bring its value down
+        var highest = 0;
+        var highestIndex = [];
+        var secondHighest = 0;
+        var secondHighest = [];
+        var x = data.length;
+        var y = data[0].length;
+
+        var i;
+        for (i=0;i<x;i++){
+          var j;
+          for(j=0;j<y;j++){
+            if (data[i][j] > highest) {
+              highest=data[i][j];
+              highestIndex = [i,j];
+            } else if (data[i][j] > secondHighest){
+              secondHighest=data[i][j];
+              secondHighestIndex = [i,j];
+            }
+          }
+        }
+
+        // if highest heatmap value is >1.5x the second highest, make highest = second highest
+        if (highest>secondHighest*1.5) {
+          console.log('Snail detected');
+          data[highestIndex[0]][highestIndex[1]] = data[secondHighestIndex[0]][secondHighestIndex[1]];
+        }
+        return data
+      }
+
+      // generate plot and heatmap
+      function drawPlot() {
+        var trace1 = {
+          x: outputDataX,
+          y: outputDataY,
+          mode: 'markers',
+          type: 'scatter'
+        };
+
+        var data = [trace1];
+
+        var layout = {
+          xaxis: {
+            range: [ 0, 700 ]
+          },
+          yaxis: {
+            range: [-500, 0]
+          },
+          title:vidName
+        };
+
+        Plotly.newPlot('plot', data, layout);
+      }
+      function drawMap() {
+        // convert plot array to heatmap array
+        var data = generateHeatmap();
+        // check for snails
+        var checkedData = checkData(data);
+
+        // draw heatmap
+        var mapData = [
+          {
+            z: checkedData,
+            type: 'heatmap'
+          }
+        ];
+
+        Plotly.newPlot('map', mapData).then(
+        function(gd)
+         {
+          // convert heatmap to base64 png
+          Plotly.toImage(gd,{format:'png',height:300,width:300})
+             .then(
+                 function(url)
+             {
+                 // download base64 png as image file
+                 url = url.substring(22);
+                 download(vidName+'.png',url);
+             }
+             )
+        });
+      }
+
+      window.onload = function() {
+        var canvas = document.getElementById('canvas');
+        var context = canvas.getContext('2d');
+
+        // initialise colour tracker for when the light is off
+        tracking.ColorTracker.registerColor('lightOff', function(r, g, b) {
+          var dx = r - 74;
+          var dy = g - 60;
+          var dz = b - 72;
+
+          if ((b - g) >= 100 && (r - g) >= 60) {
+            return true;
+          }
+          return dx * dx + dy * dy + dz * dz < 3500;
+        });
+
+        // initialise colour tracker for when the light is on
+        tracking.ColorTracker.registerColor('lightOn', function(r, g, b) {
+          var dx = r - 140;
+          var dy = g - 120;
+          var dz = b - 116;
+          if ((b - g) >= 100 && (r - g) >= 60) {
+            return true;
+          }
+          return dx * dx + dy * dy + dz * dz < 3500;
+        });
+
+        // set up colour tracker
+        var tracker = new tracking.ColorTracker(['lightOff', 'lightOn']);
+        tracker.setMinDimension(5);
+
+        // tell the tracker to track the video
+        tracking.track('#video', tracker);
+
+        // start listening
+        tracker.on('track', function(event) {
+
+          // clear canvas
+          context.clearRect(0, 0, canvas.width, canvas.height);
+
+          // for each tracked element returned
+          event.data.forEach(function(rect) {
+
+            if (playing) { // do nothing
+            } else {
+              // stop listening
+              tracker.removeAllListeners('track');
+            }
+
+            // draw rectangle to canvas for each tracked element
+            if (rect.color === 'custom') {
+              rect.color = tracker.customColor;
+            }
+            context.strokeStyle = rect.color;
+            context.strokeRect(rect.x, rect.y, rect.width, rect.height);
+            context.font = '11px Helvetica';
+            context.fillStyle = "#fff";
+            context.fillText('x: ' + rect.x + 'px', rect.x + rect.width + 5, rect.y + 11);
+            context.fillText('y: ' + rect.y + 'px', rect.x + rect.width + 5, rect.y + 22);
+          });
+        });
+      };
+  </script>
+
+</body>
+</html>
